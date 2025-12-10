@@ -1,0 +1,7 @@
+project_id = "awtpzwhfavighacqlrpj"
+
+[functions.youtube-search]
+verify_jwt = false
+
+[functions.download-song]
+verify_jwt = false

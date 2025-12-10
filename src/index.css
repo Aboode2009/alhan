@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Spotify Dark Theme */
+    --background: 0 0% 7%;
+    --foreground: 0 0% 100%;
+
+    /* Spotify Cards */
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 100%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 100%;
+
+    /* Light Brown Theme */
+    --primary: 30 45% 55%;
+    --primary-foreground: 0 0% 0%;
+    --primary-glow: 30 45% 65%;
+
+    /* Spotify Secondary */
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 100%;
+
+    /* Muted Tones */
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 65%;
+
+    /* Accent */
+    --accent: 30 45% 55%;
+    --accent-foreground: 0 0% 0%;
+    --accent-glow: 30 45% 65%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders */
+    --border: 0 0% 20%;
+    --input: 0 0% 18%;
+    --ring: 30 45% 55%;
+
+    --radius: 0.5rem;
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 4%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 30 45% 55%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 0 0% 15%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 18%;
+    --sidebar-ring: 30 45% 55%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(30 45% 55%), hsl(30 45% 65%));
+    --gradient-dark: linear-gradient(180deg, hsl(0 0% 7%), hsl(0 0% 11%));
+    --gradient-card: linear-gradient(135deg, hsl(0 0% 11% / 0.95), hsl(0 0% 14% / 0.85));
+    --gradient-premium: linear-gradient(135deg, hsl(30 45% 55% / 0.1), hsl(30 45% 65% / 0.1));
+    --gradient-overlay: linear-gradient(180deg, transparent, hsl(0 0% 7% / 0.8));
+    
+    /* Shadows */
+    --shadow-glow: 0 0 40px hsl(30 45% 55% / 0.3);
+    --shadow-card: 0 8px 24px hsl(0 0% 0% / 0.4);
+    --shadow-premium: 0 12px 40px hsl(30 45% 55% / 0.2);
+    
+    /* Transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  .dark {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 100%;
+
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 100%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 100%;
+
+    --primary: 30 45% 55%;
+    --primary-foreground: 0 0% 0%;
+    --primary-glow: 30 45% 65%;
+
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 65%;
+
+    --accent: 30 45% 55%;
+    --accent-foreground: 0 0% 0%;
+    --accent-glow: 30 45% 65%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 18%;
+    --ring: 30 45% 55%;
+    
+    --sidebar-background: 0 0% 4%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 30 45% 55%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 0 0% 15%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 18%;
+    --sidebar-ring: 30 45% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    background-image: var(--gradient-dark);
+    background-attachment: fixed;
+  }
+
+  /* Premium Glass Effect */
+  .glass-effect {
+    @apply backdrop-blur-xl bg-card/40 border border-border/50;
+  }
+
+  /* Luxury Hover Effects */
+  .hover-lift {
+    @apply transition-all duration-500 hover:-translate-y-2 hover:shadow-premium;
+  }
+
+  /* Premium Shimmer Animation */
+  @keyframes shimmer {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--primary) / 0.1),
+      transparent
+    );
+    background-size: 200% 100%;
+    animation: shimmer 3s infinite;
+  }
+}

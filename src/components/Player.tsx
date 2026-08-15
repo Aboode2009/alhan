@@ -1,163 +1,71 @@
-import { Play, Pause, SkipBack, SkipForward, Volume2, Download } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Volume2, Download, Check, ListMusic } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
+import { useOfflineDownload } from "@/hooks/useOfflineDownload";
+import { useNavigate } from "react-router-dom";
 
-interface Song {
-  id: string;
-  title: string;
-  artist: string;
-  thumbnail: string;
-  duration: string;
-}
-
+interface Song { id: string; title: string; artist: string; thumbnail: string; duration: string; }
 interface PlayerProps {
-  currentSong: Song | null;
-  isPlaying: boolean;
-  onPlayPause: () => void;
-  onNext: () => void;
-  onPrevious: () => void;
-  progress: number;
-  volume: number;
-  onProgressChange: (value: number[]) => void;
-  onVolumeChange: (value: number[]) => void;
+  currentSong: Song | null; isPlaying: boolean; onPlayPause: () => void; onNext: () => void; onPrevious: () => void;
+  progress: number; volume: number; onProgressChange: (value: number[]) => void; onVolumeChange: (value: number[]) => void;
 }
 
-export const Player = ({
-  currentSong,
-  isPlaying,
-  onPlayPause,
-  onNext,
-  onPrevious,
-  progress,
-  volume,
-  onProgressChange,
-  onVolumeChange,
-}: PlayerProps) => {
+export const Player = ({ currentSong, isPlaying, onPlayPause, onNext, onPrevious, progress, volume, onProgressChange, onVolumeChange }: PlayerProps) => {
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const { downloadSong, isSongDownloaded, isDownloading, downloadProgress } = useOfflineDownload();
+  const [downloaded, setDownloaded] = React.useState(false);
+
+  React.useEffect(() => {
+    if (currentSong) isSongDownloaded(currentSong.id).then(setDownloaded).catch(() => setDownloaded(false));
+  }, [currentSong?.id]);
 
   const handleDownload = async () => {
-    if (!currentSong) return;
-
+    if (!currentSong || downloaded || isDownloading) return;
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/download-song`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            videoId: currentSong.id,
-            title: currentSong.title 
-          }),
-        }
-      );
-
-      const data = await response.json();
-      
-      if (data.downloadUrl) {
-        window.open(data.downloadUrl, '_blank');
-        toast({
-          title: "جاري التحميل",
-          description: data.message,
-        });
-      }
+      await downloadSong(currentSong);
+      setDownloaded(true);
     } catch (error) {
-      console.error('Error downloading song:', error);
-      toast({
-        title: "خطأ في التحميل",
-        description: "حدث خطأ أثناء تحميل الأغنية",
-        variant: "destructive",
-      });
+      toast({ title: "فشل التحميل", description: error instanceof Error ? error.message : "حدث خطأ أثناء التحميل", variant: "destructive" });
     }
   };
 
   if (!currentSong) return null;
-
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur">
-      <div className="container px-4 py-3 md:px-6" style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom))" }}>
-        <div className="flex items-center gap-4">
-          {/* Song Info */}
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <img
-              src={currentSong.thumbnail}
-              alt={currentSong.title}
-              className="h-14 w-14 rounded-md object-cover"
-            />
-            <div className="min-w-0 flex-1 text-right">
-              <p className="font-semibold text-sm text-foreground truncate">
-                {currentSong.title}
-              </p>
-              <p className="text-xs text-muted-foreground truncate">
-                {currentSong.artist}
-              </p>
+    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+      <div className="mx-auto w-full max-w-[1800px] px-3 sm:px-4 md:px-6 py-2 sm:py-3" style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom))" }}>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(180px,1fr)_minmax(260px,2fr)_minmax(180px,1fr)] items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 order-1">
+            <img src={currentSong.thumbnail} alt={currentSong.title} className="h-11 w-11 sm:h-14 sm:w-14 rounded-md object-cover shrink-0" />
+            <div className="min-w-0 text-right">
+              <p className="font-semibold text-xs sm:text-sm text-foreground truncate">{currentSong.title}</p>
+              <p className="text-[11px] sm:text-xs text-muted-foreground truncate">{currentSong.artist}</p>
             </div>
           </div>
 
-          {/* Controls */}
-          <div className="flex flex-col items-center gap-2 flex-1 max-w-2xl">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={onPrevious}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <SkipBack className="h-4 w-4" />
+          <div className="flex flex-col items-center gap-1 sm:gap-2 flex-1 max-w-2xl order-3 md:order-2 col-span-2 md:col-span-1">
+            <div className="flex items-center gap-4 sm:gap-6">
+              <button onClick={onPrevious} className="text-muted-foreground hover:text-foreground"><SkipBack className="h-4 w-4 sm:h-5 sm:w-5" /></button>
+              <button onClick={onPlayPause} className="flex items-center justify-center h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-primary text-black hover:scale-105 transition-transform">
+                {isPlaying ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="h-4 w-4 ml-0.5" fill="currentColor" />}
               </button>
-              
-              <button
-                onClick={onPlayPause}
-                className="flex items-center justify-center h-8 w-8 rounded-full bg-primary text-black hover:scale-105 transition-transform"
-              >
-                {isPlaying ? (
-                  <Pause className="h-4 w-4" fill="currentColor" />
-                ) : (
-                  <Play className="h-4 w-4 mr-0.5" fill="currentColor" />
-                )}
-              </button>
-
-              <button
-                onClick={onNext}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <SkipForward className="h-4 w-4" />
-              </button>
+              <button onClick={onNext} className="text-muted-foreground hover:text-foreground"><SkipForward className="h-4 w-4 sm:h-5 sm:w-5" /></button>
             </div>
-
-            <div className="w-full">
-              <Slider
-                value={[progress]}
-                onValueChange={onProgressChange}
-                max={100}
-                step={1}
-                className="w-full"
-              />
-            </div>
+            <div className="w-full"><Slider value={[progress]} onValueChange={onProgressChange} max={100} step={1} /></div>
           </div>
 
-          {/* Volume & Download */}
-          <div className="hidden md:flex items-center gap-4 flex-1 justify-end">
-            <button
-              onClick={handleDownload}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              disabled={!currentSong}
-            >
-              <Download className="h-4 w-4" />
+          <div className="flex items-center justify-end gap-2 sm:gap-4 order-2 md:order-3">
+            <button onClick={() => navigate('/now-playing')} title="الآن يتم التشغيل" className="text-muted-foreground hover:text-foreground"><ListMusic className="h-5 w-5" /></button>
+            <button onClick={handleDownload} disabled={downloaded || isDownloading} title={downloaded ? "تم التحميل" : "تحميل"} className={downloaded ? "text-primary" : "text-muted-foreground hover:text-foreground"}>
+              {downloaded ? <Check className="h-5 w-5" /> : <Download className="h-5 w-5" />}
             </button>
-
-            <div className="flex items-center gap-2 w-32">
-              <Volume2 className="h-4 w-4 text-muted-foreground" />
-              <Slider
-                value={[volume]}
-                onValueChange={onVolumeChange}
-                max={100}
-                step={1}
-                className="flex-1"
-              />
-            </div>
+            <div className="hidden lg:flex items-center gap-2 w-28"><Volume2 className="h-4 w-4 text-muted-foreground" /><Slider value={[volume]} onValueChange={onVolumeChange} max={100} step={1} /></div>
           </div>
         </div>
+        {isDownloading && <div className="mt-1 h-0.5 w-full bg-muted overflow-hidden"><div className="h-full bg-primary transition-all" style={{ width: `${downloadProgress}%` }} /></div>}
       </div>
     </div>
   );
 };
+
+import React from "react";

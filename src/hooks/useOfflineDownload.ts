@@ -1,174 +1,126 @@
-import { useState } from "react";
+import { Capacitor, registerPlugin } from "@capacitor/core";
+import { useEffect, useRef, useState } from "react";
 import { useToast } from "./use-toast";
 
-interface DownloadedSong {
+export interface OfflineSong {
   id: string;
   title: string;
   artist: string;
   thumbnail: string;
   duration: string;
-  audioBlob: Blob;
+  localPath: string;
   downloadedAt: number;
+  size?: number;
 }
 
-const DB_NAME = "AlhanDB";
-const STORE_NAME = "downloads";
-const DB_VERSION = 1;
+interface NativeDownloader {
+  download(options: { videoId: string; title?: string }): Promise<{ taskId: string }>;
+  cancel(options: { taskId: string }): Promise<void>;
+  getDownloaded(): Promise<{ songs: Array<{ id: string; localPath: string; downloadedAt: number; size: number }> }>;
+  getLocalPath(options: { videoId: string }): Promise<{ localPath: string | null }>;
+  delete(options: { videoId: string }): Promise<void>;
+  getStorageUsage(): Promise<{ bytes: number }>;
+  addListener(eventName: "downloadProgress", listener: (event: { taskId: string; videoId: string; progress: number; status?: string }) => void): Promise<{ remove: () => Promise<void> }>;
+  addListener(eventName: "downloadComplete", listener: (event: { taskId: string; videoId: string; localPath: string; size: number }) => void): Promise<{ remove: () => Promise<void> }>;
+  addListener(eventName: "downloadError", listener: (event: { taskId: string; videoId: string; message: string }) => void): Promise<{ remove: () => Promise<void> }>;
+}
+
+const YoutubeDownloader = registerPlugin<NativeDownloader>("YoutubeDownloader");
+const META_KEY = "alhan_offline_song_metadata_v1";
+type SongInput = Omit<OfflineSong, "localPath" | "downloadedAt" | "size">;
+
+const readMetadata = (): Record<string, SongInput> => {
+  try { return JSON.parse(localStorage.getItem(META_KEY) || "{}"); } catch { return {}; }
+};
+const writeMetadata = (metadata: Record<string, SongInput>) => localStorage.setItem(META_KEY, JSON.stringify(metadata));
 
 export const useOfflineDownload = () => {
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const { toast } = useToast();
+  const pending = useRef(new Map<string, { resolve: (song: OfflineSong) => void; reject: (error: Error) => void }>());
 
-  const openDB = (): Promise<IDBDatabase> => {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android") return;
+    let active = true;
+    const listeners: Array<{ remove: () => Promise<void> }> = [];
+    (async () => {
+      listeners.push(await YoutubeDownloader.addListener("downloadProgress", (event) => {
+        if (active) { setDownloadProgress(Math.round(event.progress)); setIsDownloading(true); }
+      }));
+      listeners.push(await YoutubeDownloader.addListener("downloadComplete", (event) => {
+        const request = pending.current.get(event.taskId);
+        if (!request) return;
+        pending.current.delete(event.taskId);
+        setDownloadProgress(100);
+        request.resolve({ id: event.videoId, title: "", artist: "", thumbnail: "", duration: "0:00", localPath: event.localPath, downloadedAt: Date.now(), size: event.size });
+      }));
+      listeners.push(await YoutubeDownloader.addListener("downloadError", (event) => {
+        const request = pending.current.get(event.taskId);
+        if (!request) return;
+        pending.current.delete(event.taskId);
+        request.reject(new Error(event.message || "Download failed"));
+      }));
+    })().catch((e) => console.error("Downloader listeners failed", e));
+    return () => { active = false; listeners.forEach((l) => l.remove().catch(() => undefined)); };
+  }, []);
 
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result);
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME, { keyPath: "id" });
-        }
-      };
-    });
+  const downloadSong = async (song: SongInput): Promise<OfflineSong> => {
+    setIsDownloading(true); setDownloadProgress(0);
+    try {
+      if (Capacitor.getPlatform() !== "android") throw new Error("Offline downloads are available in the Android app.");
+      const existing = await YoutubeDownloader.getLocalPath({ videoId: song.id });
+      if (existing.localPath) return { ...song, localPath: existing.localPath, downloadedAt: Date.now() };
+      const { taskId } = await YoutubeDownloader.download({ videoId: song.id, title: song.title });
+      const downloaded = await new Promise<OfflineSong>((resolve, reject) => pending.current.set(taskId, { resolve, reject }));
+      const metadata = readMetadata(); metadata[song.id] = song; writeMetadata(metadata);
+      toast({ title: "تم التحميل", description: `تم تحميل ${song.title} بنجاح` });
+      return { ...song, ...downloaded };
+    } catch (error) {
+      console.error("Native offline download failed", error);
+      toast({ title: "فشل التحميل", description: error instanceof Error ? error.message : "حدث خطأ أثناء التحميل", variant: "destructive" });
+      throw error;
+    } finally { setIsDownloading(false); }
   };
 
-  const downloadSong = async (song: {
-    id: string;
-    title: string;
-    artist: string;
-    thumbnail: string;
-    duration: string;
-  }) => {
-    setIsDownloading(true);
-    try {
-      const streamsRes = await fetch(`https://piped.video/api/v1/streams?video=${encodeURIComponent(song.id)}`);
-      if (!streamsRes.ok) throw new Error("Failed to fetch streams");
-      const streamsData = await streamsRes.json();
-      type PipedAudioStream = { bitrate?: number; url: string };
-      const audioStreams: PipedAudioStream[] = streamsData.audioStreams || [];
-      const audio = audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-      if (!audio || !audio.url) throw new Error("No audio stream available");
-      const audioRes = await fetch(audio.url);
-      if (!audioRes.ok) throw new Error("Failed to download audio");
-      const blob = await audioRes.blob();
-      const db = await openDB();
-      const transaction = db.transaction([STORE_NAME], "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-
-      const downloadedSong: DownloadedSong = {
-        ...song,
-        audioBlob: blob,
-        downloadedAt: Date.now(),
-      };
-
-      await store.put(downloadedSong);
-
-      toast({
-        title: "تم التحميل",
-        description: `تم تحميل ${song.title} بنجاح`,
-      });
-    } catch (error) {
-      console.error("Download error:", error);
-      toast({
-        title: "فشل التحميل",
-        description: "حدث خطأ أثناء تحميل الأغنية",
-        variant: "destructive",
-      });
-    } finally {
-      setIsDownloading(false);
-    }
+  const getDownloadedSongs = async (): Promise<OfflineSong[]> => {
+    if (Capacitor.getPlatform() !== "android") return [];
+    const { songs } = await YoutubeDownloader.getDownloaded();
+    const metadata = readMetadata();
+    return songs.map((song) => ({
+      id: song.id, title: metadata[song.id]?.title || song.id, artist: metadata[song.id]?.artist || "YouTube",
+      thumbnail: metadata[song.id]?.thumbnail || "", duration: metadata[song.id]?.duration || "0:00",
+      localPath: song.localPath, downloadedAt: song.downloadedAt, size: song.size,
+    }));
   };
 
-  const getDownloadedSongs = async (): Promise<DownloadedSong[]> => {
-    try {
-      const db = await openDB();
-      const transaction = db.transaction([STORE_NAME], "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.getAll();
+  const isSongDownloaded = async (songId: string) => {
+    if (Capacitor.getPlatform() !== "android") return false;
+    const { localPath } = await YoutubeDownloader.getLocalPath({ videoId: songId }); return Boolean(localPath);
+  };
 
-      return new Promise((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-    } catch (error) {
-      console.error("Error fetching downloads:", error);
-      return [];
-    }
+  const getSong = async (songId: string): Promise<OfflineSong | null> => {
+    if (Capacitor.getPlatform() !== "android") return null;
+    const { localPath } = await YoutubeDownloader.getLocalPath({ videoId: songId }); if (!localPath) return null;
+    const metadata = readMetadata()[songId];
+    return { id: songId, title: metadata?.title || songId, artist: metadata?.artist || "YouTube", thumbnail: metadata?.thumbnail || "", duration: metadata?.duration || "0:00", localPath, downloadedAt: Date.now() };
+  };
+
+  const getAudioUrl = async (songId: string) => {
+    const song = await getSong(songId); return song?.localPath ? Capacitor.convertFileSrc(song.localPath) : null;
   };
 
   const deleteSong = async (songId: string) => {
-    try {
-      const db = await openDB();
-      const transaction = db.transaction([STORE_NAME], "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-      await store.delete(songId);
-
-      toast({
-        title: "تم الحذف",
-        description: "تم حذف الأغنية من التنزيلات",
-      });
-    } catch (error) {
-      console.error("Delete error:", error);
-      toast({
-        title: "فشل الحذف",
-        description: "حدث خطأ أثناء حذف الأغنية",
-        variant: "destructive",
-      });
-    }
+    if (Capacitor.getPlatform() !== "android") return;
+    await YoutubeDownloader.delete({ videoId: songId });
+    const metadata = readMetadata(); delete metadata[songId]; writeMetadata(metadata);
+    toast({ title: "تم الحذف", description: "تم حذف الأغنية من التنزيلات" });
   };
 
-  const isSongDownloaded = async (songId: string): Promise<boolean> => {
-    try {
-      const db = await openDB();
-      const transaction = db.transaction([STORE_NAME], "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(songId);
-
-      return new Promise((resolve) => {
-        request.onsuccess = () => resolve(!!request.result);
-        request.onerror = () => resolve(false);
-      });
-    } catch (error) {
-      return false;
-    }
+  const getStorageUsage = async () => {
+    if (Capacitor.getPlatform() !== "android") return 0;
+    const { bytes } = await YoutubeDownloader.getStorageUsage(); return bytes;
   };
 
-  const getSong = async (songId: string): Promise<DownloadedSong | null> => {
-    try {
-      const db = await openDB();
-      const transaction = db.transaction([STORE_NAME], "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(songId);
-      return new Promise((resolve) => {
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => resolve(null);
-      });
-    } catch {
-      return null;
-    }
-  };
-
-  const getAudioUrl = async (songId: string): Promise<string | null> => {
-    const item = await getSong(songId);
-    if (!item) return null;
-    try {
-      const url = URL.createObjectURL(item.audioBlob);
-      return url;
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    downloadSong,
-    getDownloadedSongs,
-    deleteSong,
-    isSongDownloaded,
-    getSong,
-    getAudioUrl,
-    isDownloading,
-  };
+  return { downloadSong, getDownloadedSongs, deleteSong, isSongDownloaded, getSong, getAudioUrl, getStorageUsage, cancelDownload: (taskId: string) => YoutubeDownloader.cancel({ taskId }), isDownloading, downloadProgress };
 };

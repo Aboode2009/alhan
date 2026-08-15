@@ -8,7 +8,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.yausername.youtubedl_android.FFmpeg;
+import com.yausername.ffmpeg.FFmpeg;
 import com.yausername.youtubedl_android.YoutubeDL;
 import com.yausername.youtubedl_android.YoutubeDLException;
 import com.yausername.youtubedl_android.YoutubeDLRequest;
@@ -44,26 +44,20 @@ public class YoutubeDownloaderPlugin extends Plugin {
     private File getDownloadDirectory() {
         File base = getContext().getExternalFilesDir(Environment.DIRECTORY_MUSIC);
         File directory = new File(base, "Alhan");
-        if (!directory.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            directory.mkdirs();
-        }
+        if (!directory.exists()) directory.mkdirs();
         return directory;
     }
 
     @PluginMethod
     public void download(final PluginCall call) {
         final String videoId = call.getString("videoId");
-        final String title = call.getString("title", "Alhan");
         if (videoId == null || videoId.trim().isEmpty()) {
             call.reject("videoId is required");
             return;
         }
-
         final String taskId = UUID.randomUUID().toString();
         final String processId = "alhan-" + taskId;
         taskProcesses.put(taskId, processId);
-
         JSObject accepted = new JSObject();
         accepted.put("taskId", taskId);
         call.resolve(accepted);
@@ -91,9 +85,7 @@ public class YoutubeDownloaderPlugin extends Plugin {
 
                 YoutubeDL.getInstance().execute(request, processId, callback);
                 File output = findDownloadedFile(directory, videoId);
-                if (output == null) {
-                    throw new IllegalStateException("Downloaded file was not found");
-                }
+                if (output == null) throw new IllegalStateException("Downloaded file was not found");
 
                 JSObject complete = new JSObject();
                 complete.put("taskId", taskId);
@@ -117,50 +109,36 @@ public class YoutubeDownloaderPlugin extends Plugin {
     private File findDownloadedFile(File directory, String videoId) {
         File[] files = directory.listFiles();
         if (files == null) return null;
-        for (File file : files) {
-            if (file.isFile() && file.getName().startsWith(videoId + ".")) {
-                return file;
-            }
-        }
+        for (File file : files) if (file.isFile() && file.getName().startsWith(videoId + ".")) return file;
         return null;
     }
 
     @PluginMethod
     public void cancel(PluginCall call) {
         String taskId = call.getString("taskId");
-        if (taskId == null) {
-            call.reject("taskId is required");
-            return;
-        }
+        if (taskId == null) { call.reject("taskId is required"); return; }
         String processId = taskProcesses.get(taskId);
         if (processId != null) {
-            try {
-                YoutubeDL.getInstance().destroyProcessById(processId);
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to cancel process", e);
-            }
+            try { YoutubeDL.getInstance().destroyProcessById(processId); } catch (Exception e) { Log.w(TAG, "Failed to cancel process", e); }
         }
         call.resolve();
     }
 
     @PluginMethod
     public void getDownloaded(PluginCall call) {
-        File directory = getDownloadDirectory();
-        File[] files = directory.listFiles();
+        File[] files = getDownloadDirectory().listFiles();
         List<JSObject> songs = new ArrayList<>();
-        if (files != null) {
-            for (File file : files) {
-                if (!file.isFile()) continue;
-                String name = file.getName();
-                int dot = name.lastIndexOf('.');
-                String id = dot > 0 ? name.substring(0, dot) : name;
-                JSObject song = new JSObject();
-                song.put("id", id);
-                song.put("localPath", file.getAbsolutePath());
-                song.put("downloadedAt", file.lastModified());
-                song.put("size", file.length());
-                songs.add(song);
-            }
+        if (files != null) for (File file : files) {
+            if (!file.isFile()) continue;
+            String name = file.getName();
+            int dot = name.lastIndexOf('.');
+            String id = dot > 0 ? name.substring(0, dot) : name;
+            JSObject song = new JSObject();
+            song.put("id", id);
+            song.put("localPath", file.getAbsolutePath());
+            song.put("downloadedAt", file.lastModified());
+            song.put("size", file.length());
+            songs.add(song);
         }
         JSObject result = new JSObject();
         result.put("songs", songs);
@@ -170,10 +148,7 @@ public class YoutubeDownloaderPlugin extends Plugin {
     @PluginMethod
     public void getLocalPath(PluginCall call) {
         String videoId = call.getString("videoId");
-        if (videoId == null) {
-            call.reject("videoId is required");
-            return;
-        }
+        if (videoId == null) { call.reject("videoId is required"); return; }
         File file = findDownloadedFile(getDownloadDirectory(), videoId);
         JSObject result = new JSObject();
         result.put("localPath", file != null ? file.getAbsolutePath() : null);
@@ -183,15 +158,9 @@ public class YoutubeDownloaderPlugin extends Plugin {
     @PluginMethod
     public void delete(PluginCall call) {
         String videoId = call.getString("videoId");
-        if (videoId == null) {
-            call.reject("videoId is required");
-            return;
-        }
+        if (videoId == null) { call.reject("videoId is required"); return; }
         File file = findDownloadedFile(getDownloadDirectory(), videoId);
-        if (file != null && file.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            file.delete();
-        }
+        if (file != null && file.exists()) file.delete();
         call.resolve();
     }
 
@@ -199,11 +168,7 @@ public class YoutubeDownloaderPlugin extends Plugin {
     public void getStorageUsage(PluginCall call) {
         long total = 0;
         File[] files = getDownloadDirectory().listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.isFile()) total += file.length();
-            }
-        }
+        if (files != null) for (File file : files) if (file.isFile()) total += file.length();
         JSObject result = new JSObject();
         result.put("bytes", total);
         call.resolve(result);

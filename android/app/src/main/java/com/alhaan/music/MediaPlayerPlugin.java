@@ -8,7 +8,10 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.yausername.youtubedl_android.YoutubeDL;
+import com.yausername.youtubedl_android.YoutubeDLRequest;
 import java.io.File;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -16,9 +19,8 @@ import java.util.concurrent.Future;
 @CapacitorPlugin(name = "MediaPlayer")
 public class MediaPlayerPlugin extends Plugin {
     private static final String TAG = "MediaPlayerPlugin";
-    // Single-thread: only one stream resolution at a time; cancel the old one on new play()
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private volatile Future<?> pendingTask = null;
+    private volatile Future<?> pendingResolution = null;
 
     private void startPlaybackService(String uri, String title, String artist, String artwork) {
         Intent intent = new Intent(getContext(), AlhanMediaService.class);
@@ -36,7 +38,6 @@ public class MediaPlayerPlugin extends Plugin {
 
     @PluginMethod
     public void startService(PluginCall call) {
-        // No-op: service starts lazily when play() is called
         call.resolve();
     }
 
@@ -48,7 +49,7 @@ public class MediaPlayerPlugin extends Plugin {
         String artist    = call.getString("artist", "");
         String artwork   = call.getString("artwork", "");
 
-        boolean hasVideoId   = videoId != null && !videoId.isEmpty();
+        boolean hasVideoId   = videoId   != null && !videoId.isEmpty();
         boolean hasLocalPath = localPath != null && !localPath.isEmpty();
 
         if (!hasVideoId && !hasLocalPath) {
@@ -56,7 +57,7 @@ public class MediaPlayerPlugin extends Plugin {
             return;
         }
 
-        // ── Local file (downloaded song) ──────────────────────────────────
+        // ── Local file (offline download) ──────────────────────────────────
         if (hasLocalPath) {
             try {
                 String path = localPath.startsWith("file://") ? Uri.parse(localPath).getPath() : localPath;
@@ -71,18 +72,42 @@ public class MediaPlayerPlugin extends Plugin {
             return;
         }
 
-        // ── YouTube stream via Piped API ──────────────────────────────────
-        // Cancel any in-flight resolution (user tapped a different song)
-        Future<?> prev = pendingTask;
+        // ── YouTube stream resolution ──────────────────────────────────────
+        if (!AlhanApplication.ytdlpReady) {
+            call.reject("مشغل الصوت لا يزال يُحضّر، حاول مرة أخرى بعد لحظة.");
+            return;
+        }
+
+        // Cancel any in-flight resolution
+        Future<?> prev = pendingResolution;
         if (prev != null && !prev.isDone()) prev.cancel(true);
 
-        final String id = videoId;
-        final String fTitle = title, fArtist = artist, fArtwork = artwork;
+        final String id       = videoId;
+        final String fTitle   = title;
+        final String fArtist  = artist;
+        final String fArtwork = artwork;
 
-        pendingTask = executor.submit(() -> {
+        Future<?> task = executor.submit(() -> {
             try {
-                String url = PipedStreamResolver.resolveAudio(id);
+                YoutubeDLRequest request = new YoutubeDLRequest("https://www.youtube.com/watch?v=" + id);
+                request.addOption("--no-playlist");
+                request.addOption("--no-warnings");
+                request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best");
+                request.addOption("-g");
+
+                String processId = "alhan-play-" + UUID.randomUUID();
+                String output = YoutubeDL.getInstance().execute(request, processId, null).getOut();
+
                 if (Thread.currentThread().isInterrupted()) return;
+
+                if (output == null || output.trim().isEmpty()) {
+                    getActivity().runOnUiThread(() -> call.reject("Could not resolve audio stream URL"));
+                    return;
+                }
+
+                String url = output.trim().split("[\\r\\n]+")[0].trim();
+                Log.d(TAG, "Stream URL resolved for " + id);
+
                 getActivity().runOnUiThread(() -> {
                     try {
                         startPlaybackService(url, fTitle, fArtist, fArtwork);
@@ -94,15 +119,17 @@ public class MediaPlayerPlugin extends Plugin {
                 });
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                // Superseded by a newer play() call — no reject needed
+                // Superseded by a newer play() call — no need to reject
             } catch (Exception e) {
                 Log.e(TAG, "Stream resolution failed for " + id, e);
                 if (!Thread.currentThread().isInterrupted()) {
                     getActivity().runOnUiThread(() ->
-                        call.reject("تعذر الحصول على مصدر الصوت. جرّب أغنية أخرى أو أعد المحاولة."));
+                        call.reject(e.getMessage() != null ? e.getMessage() : "Playback failed"));
                 }
             }
         });
+
+        pendingResolution = task;
     }
 
     @PluginMethod public void pause(PluginCall call)  { AlhanMediaService.pause();  call.resolve(); }
@@ -136,8 +163,8 @@ public class MediaPlayerPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
-        Future<?> t = pendingTask;
-        if (t != null) t.cancel(true);
+        Future<?> pending = pendingResolution;
+        if (pending != null) pending.cancel(true);
         executor.shutdownNow();
         super.handleOnDestroy();
     }

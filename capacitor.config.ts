@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.alhaan.music',
-  appName: 'youtube-tarab-player',
+  appName: 'Alhan',
   webDir: 'dist',
   server: {
     androidScheme: 'https'

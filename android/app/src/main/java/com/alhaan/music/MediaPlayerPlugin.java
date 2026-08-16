@@ -11,11 +11,14 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 @CapacitorPlugin(name = "MediaPlayer")
 public class MediaPlayerPlugin extends Plugin {
     private static final String TAG = "MediaPlayerPlugin";
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    // Single-thread: only one stream resolution at a time; cancel the old one on new play()
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private volatile Future<?> pendingTask = null;
 
     private void startPlaybackService(String uri, String title, String artist, String artwork) {
         Intent intent = new Intent(getContext(), AlhanMediaService.class);
@@ -24,23 +27,37 @@ public class MediaPlayerPlugin extends Plugin {
         intent.putExtra(AlhanMediaService.EXTRA_TITLE, title);
         intent.putExtra(AlhanMediaService.EXTRA_ARTIST, artist);
         intent.putExtra(AlhanMediaService.EXTRA_ARTWORK, artwork);
-        if (android.os.Build.VERSION.SDK_INT >= 26) getContext().startForegroundService(intent); else getContext().startService(intent);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            getContext().startForegroundService(intent);
+        } else {
+            getContext().startService(intent);
+        }
     }
 
-    @PluginMethod public void startService(PluginCall call) { call.resolve(); }
+    @PluginMethod
+    public void startService(PluginCall call) {
+        // No-op: service starts lazily when play() is called
+        call.resolve();
+    }
 
     @PluginMethod
     public void play(PluginCall call) {
-        String videoId = call.getString("videoId");
+        String videoId   = call.getString("videoId");
         String localPath = call.getString("localPath");
-        String title = call.getString("title", "Alhan");
-        String artist = call.getString("artist", "");
-        String artwork = call.getString("artwork", "");
-        if ((videoId == null || videoId.isEmpty()) && (localPath == null || localPath.isEmpty())) {
-            call.reject("videoId or localPath is required"); return;
+        String title     = call.getString("title", "Alhan");
+        String artist    = call.getString("artist", "");
+        String artwork   = call.getString("artwork", "");
+
+        boolean hasVideoId   = videoId != null && !videoId.isEmpty();
+        boolean hasLocalPath = localPath != null && !localPath.isEmpty();
+
+        if (!hasVideoId && !hasLocalPath) {
+            call.reject("videoId or localPath is required");
+            return;
         }
 
-        if (localPath != null && !localPath.isEmpty()) {
+        // ── Local file (downloaded song) ──────────────────────────────────
+        if (hasLocalPath) {
             try {
                 String path = localPath.startsWith("file://") ? Uri.parse(localPath).getPath() : localPath;
                 File file = new File(path);
@@ -54,34 +71,74 @@ public class MediaPlayerPlugin extends Plugin {
             return;
         }
 
+        // ── YouTube stream via Piped API ──────────────────────────────────
+        // Cancel any in-flight resolution (user tapped a different song)
+        Future<?> prev = pendingTask;
+        if (prev != null && !prev.isDone()) prev.cancel(true);
+
         final String id = videoId;
-        executor.execute(() -> {
+        final String fTitle = title, fArtist = artist, fArtwork = artwork;
+
+        pendingTask = executor.submit(() -> {
             try {
-                // Resolve the stream through a server-side extractor API instead of
-                // spawning yt-dlp on the UI process. This avoids native process crashes
-                // on Huawei/Xiaomi Android builds and keeps the user inside Alhan.
                 String url = PipedStreamResolver.resolveAudio(id);
+                if (Thread.currentThread().isInterrupted()) return;
                 getActivity().runOnUiThread(() -> {
                     try {
-                        startPlaybackService(url, title, artist, artwork);
+                        startPlaybackService(url, fTitle, fArtist, fArtwork);
                         call.resolve();
                     } catch (Exception e) {
-                        Log.e(TAG, "Unable to start playback service", e);
+                        Log.e(TAG, "Playback service start failed", e);
                         call.reject("Playback service failed: " + e.getMessage());
                     }
                 });
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                // Superseded by a newer play() call — no reject needed
             } catch (Exception e) {
-                Log.e(TAG, "Unable to resolve YouTube audio", e);
-                getActivity().runOnUiThread(() -> call.reject("تعذر الحصول على مصدر الصوت. حاول مرة أخرى."));
+                Log.e(TAG, "Stream resolution failed for " + id, e);
+                if (!Thread.currentThread().isInterrupted()) {
+                    getActivity().runOnUiThread(() ->
+                        call.reject("تعذر الحصول على مصدر الصوت. جرّب أغنية أخرى أو أعد المحاولة."));
+                }
             }
         });
     }
 
-    @PluginMethod public void pause(PluginCall call) { AlhanMediaService.pause(); call.resolve(); }
+    @PluginMethod public void pause(PluginCall call)  { AlhanMediaService.pause();  call.resolve(); }
     @PluginMethod public void resume(PluginCall call) { AlhanMediaService.resume(); call.resolve(); }
-    @PluginMethod public void stop(PluginCall call) { AlhanMediaService.stop(); call.resolve(); }
-    @PluginMethod public void seek(PluginCall call) { Double seconds = call.getDouble("seconds"); if (seconds == null) { call.reject("seconds is required"); return; } AlhanMediaService.seek((long)(seconds * 1000)); call.resolve(); }
-    @PluginMethod public void setVolume(PluginCall call) { Double volume = call.getDouble("volume"); if (volume == null) { call.reject("volume is required"); return; } AlhanMediaService.setVolume(Math.max(0f, Math.min(1f, volume.floatValue()))); call.resolve(); }
-    @PluginMethod public void getState(PluginCall call) { JSObject result = new JSObject(); result.put("isPlaying", AlhanMediaService.isPlaying()); result.put("position", AlhanMediaService.getPosition()); result.put("duration", AlhanMediaService.getDuration()); call.resolve(result); }
-    @Override protected void handleOnDestroy() { executor.shutdownNow(); super.handleOnDestroy(); }
+    @PluginMethod public void stop(PluginCall call)   { AlhanMediaService.stop();   call.resolve(); }
+
+    @PluginMethod
+    public void seek(PluginCall call) {
+        Double seconds = call.getDouble("seconds");
+        if (seconds == null) { call.reject("seconds is required"); return; }
+        AlhanMediaService.seek((long)(seconds * 1000));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setVolume(PluginCall call) {
+        Double volume = call.getDouble("volume");
+        if (volume == null) { call.reject("volume is required"); return; }
+        AlhanMediaService.setVolume(Math.max(0f, Math.min(1f, volume.floatValue())));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getState(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("isPlaying", AlhanMediaService.isPlaying());
+        r.put("position",  AlhanMediaService.getPosition());
+        r.put("duration",  AlhanMediaService.getDuration());
+        call.resolve(r);
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        Future<?> t = pendingTask;
+        if (t != null) t.cancel(true);
+        executor.shutdownNow();
+        super.handleOnDestroy();
+    }
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { Header } from "@/components/Header";
 import { SongCard } from "@/components/SongCard";
 import { Player } from "@/components/Player";
@@ -6,17 +7,16 @@ import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { addTick, recordPlay, getStats, getTop, getTopSearchQueries, recordSearch } from "@/lib/stats";
-import { Capacitor, registerPlugin } from "@capacitor/core";
+import { Capacitor } from "@capacitor/core";
 import { useNativeMediaPlayer } from "@/hooks/useNativeMediaPlayer";
 import { useOfflineDownload } from "@/hooks/useOfflineDownload";
 import { supabase } from "@/integrations/supabase/client";
 
 interface Song { id: string; title: string; artist: string; thumbnail: string; duration: string; }
-interface NativeSearch { search(options: { query: string }): Promise<{ songs: Song[] }>; }
-const NativeSearch = registerPlugin<NativeSearch>("YoutubeSearch");
 const QUEUE_KEY = "alhan_queue_v1";
 
 const Index = () => {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [songs, setSongs] = useState<Song[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -28,18 +28,13 @@ const Index = () => {
   const native = useNativeMediaPlayer();
   const { getSong } = useOfflineDownload();
   const isAndroid = Capacitor.getPlatform() === "android";
-  const debounceRef = useRef<number | undefined>(undefined);
 
-  // ── Search ──────────────────────────────────────────────────────────────────
+  // ── Search ─────────────────────────────────────────────────────────────────
 
   const fetchSongsByQuery = async (query: string): Promise<Song[]> => {
-    if (isAndroid) {
-      const result = await NativeSearch.search({ query });
-      return result.songs || [];
-    }
     const { data, error } = await supabase.functions.invoke("youtube-search", { body: { query } });
-    if (error) throw new Error(error.message);
-    return (data?.songs || []) as Song[];
+    if (!error && data?.songs) return data.songs as Song[];
+    throw new Error(error?.message || data?.error || "Search service unavailable");
   };
 
   const searchYouTube = async (query: string) => {
@@ -53,7 +48,7 @@ const Index = () => {
       console.error("Alhan search error", e);
       toast({
         title: "البحث غير متاح",
-        description: "تعذر الوصول إلى خدمة البحث. حاول مرة أخرى بعد لحظات.",
+        description: "تعذر الاتصال بخدمة البحث. تأكد من اتصال الإنترنت ثم حاول مرة أخرى.",
         variant: "destructive",
       });
       setSongs([]);
@@ -63,9 +58,10 @@ const Index = () => {
   };
 
   // Initial load
-  useEffect(() => { searchYouTube("أغاني عربية"); }, []);
+  useEffect(() => { searchYouTube("أغاني عربية 2024"); }, []);
 
   // Debounced search — fires 600 ms after the user stops typing
+  const debounceRef = useRef<number | undefined>(undefined);
   const handleSearchChange = (query: string) => {
     setSearchQuery(query);
     clearTimeout(debounceRef.current);
@@ -73,17 +69,19 @@ const Index = () => {
     debounceRef.current = window.setTimeout(() => searchYouTube(query), 600);
   };
 
-  // ── Playback ────────────────────────────────────────────────────────────────
+  // ── Playback ───────────────────────────────────────────────────────────────
 
   const handlePlayPause = async (song: Song) => {
-    try {
-      if (!currentSong || currentSong.id !== song.id) {
-        localStorage.setItem(QUEUE_KEY, JSON.stringify(songs.length ? songs : [song]));
-        setCurrentSong(song);
-        setIsPlaying(true);
-        setProgress(0);
-        recordPlay({ id: song.id, title: song.title, artist: song.artist });
-        if (isAndroid) {
+    if (!currentSong || currentSong.id !== song.id) {
+      // New song — start fresh
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(songs.length ? songs : [song]));
+      setCurrentSong(song);
+      setIsPlaying(true);
+      setProgress(0);
+      recordPlay({ id: song.id, title: song.title, artist: song.artist });
+
+      if (isAndroid) {
+        try {
           const downloaded = await getSong(song.id);
           await native.play({
             videoId: downloaded ? undefined : song.id,
@@ -92,27 +90,28 @@ const Index = () => {
             artist: song.artist,
             artwork: song.thumbnail,
           });
-        }
-      } else {
-        const next = !isPlaying;
-        setIsPlaying(next);
-        if (isAndroid) {
-          if (next) {
-            recordPlay({ id: song.id, title: song.title, artist: song.artist });
-            await native.resume();
-          } else {
-            await native.pause();
-          }
+        } catch (e: any) {
+          console.error("Alhan playback error", e);
+          setIsPlaying(false);
+          toast({
+            title: "تعذر تشغيل الأغنية",
+            description: e?.message || "تعذر الوصول إلى مصدر الصوت. حاول مرة أخرى.",
+            variant: "destructive",
+          });
         }
       }
-    } catch (e: any) {
-      console.error("Alhan playback error", e);
-      setIsPlaying(false);
-      toast({
-        title: "تعذر تشغيل الأغنية",
-        description: e?.message || "مصدر الصوت غير متاح. جرّب أغنية أخرى أو أعد المحاولة.",
-        variant: "destructive",
-      });
+    } else {
+      // Same song — toggle
+      const next = !isPlaying;
+      setIsPlaying(next);
+      if (isAndroid) {
+        if (next) {
+          recordPlay({ id: song.id, title: song.title, artist: song.artist });
+          await native.resume().catch(() => undefined);
+        } else {
+          await native.pause().catch(() => undefined);
+        }
+      }
     }
   };
 
@@ -128,13 +127,15 @@ const Index = () => {
     await handlePlayPause(songs[(i - 1 + songs.length) % songs.length]);
   };
 
-  // Sync progress bar with native player state
+  // Sync progress from native player
   useEffect(() => {
     if (!isAndroid || native.state.duration <= 0) return;
     setProgress((native.state.position / native.state.duration) * 100);
   }, [native.state.position, native.state.duration, isAndroid]);
 
-  useEffect(() => { native.setVolume(volume / 100).catch(() => undefined); }, [volume]);
+  useEffect(() => {
+    native.setVolume(volume / 100).catch(() => undefined);
+  }, [volume]);
 
   // Stats tick
   useEffect(() => {
@@ -144,7 +145,7 @@ const Index = () => {
     return () => window.clearInterval(interval);
   }, [isPlaying, currentSong]);
 
-  // ── Recommendations ─────────────────────────────────────────────────────────
+  // ── Recommendations ────────────────────────────────────────────────────────
 
   const [suggestions, setSuggestions] = useState<Song[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -159,7 +160,6 @@ const Index = () => {
         seeds.push(...getTop(s.playCountsArtist, 2).map(([name]) => name));
         seeds.push(...getTop(s.playCountsSong, 2).map(([id]) => s.songTitles[id]).filter((t): t is string => !!t));
         const queries = Array.from(new Set(seeds)).slice(0, 3);
-        if (!queries.length) { setSuggestions([]); return; }
         const results: Song[] = [];
         for (const q of queries) results.push(...await fetchSongsByQuery(q));
         const dedup = new Map<string, Song>();
@@ -169,9 +169,9 @@ const Index = () => {
       finally { setLoadingSuggestions(false); }
     };
     load();
-  }, [isAndroid]);
+  }, []);
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <Layout>
@@ -193,12 +193,13 @@ const Index = () => {
           }
         </div>
 
-        {/* Discover */}
+        {/* Discover header */}
         <div className="mb-6">
           <h2 className="text-4xl font-bold mb-2 text-foreground">اكتشف الموسيقى</h2>
           <p className="text-muted-foreground text-lg">ابحث عن أغانيك المفضلة واستمع إليها</p>
         </div>
 
+        {/* Results */}
         {isSearching
           ? <div className="text-center py-20"><p className="text-muted-foreground text-lg">جاري البحث...</p></div>
           : <>

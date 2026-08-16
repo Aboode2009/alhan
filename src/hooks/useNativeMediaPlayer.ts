@@ -26,15 +26,25 @@ export const useNativeMediaPlayer = () => {
 
   useEffect(() => {
     if (!isAndroid) return;
-    MediaPlayer.startService().catch(() => undefined);
+    // IMPORTANT: do not start the MediaSession foreground service during app boot.
+    // On some Android/Huawei builds, creating a media foreground service before
+    // playback is requested can terminate the Activity immediately. The service
+    // is started lazily by play() below, only when the user actually plays music.
     timer.current = window.setInterval(refresh, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); };
   }, [isAndroid, refresh]);
 
+  const play = async (options: Parameters<NativeMediaPlayer["play"]>[0]) => {
+    if (!isAndroid) return;
+    await MediaPlayer.startService();
+    await MediaPlayer.play(options);
+    await refresh();
+  };
+
   return {
     isAndroid,
     state,
-    play: (options: Parameters<NativeMediaPlayer["play"]>[0]) => isAndroid ? MediaPlayer.play(options) : Promise.resolve(),
+    play,
     pause: () => isAndroid ? MediaPlayer.pause() : Promise.resolve(),
     resume: () => isAndroid ? MediaPlayer.resume() : Promise.resolve(),
     stop: () => isAndroid ? MediaPlayer.stop() : Promise.resolve(),

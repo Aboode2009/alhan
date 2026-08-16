@@ -8,10 +8,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.yausername.youtubedl_android.YoutubeDL;
-import com.yausername.youtubedl_android.YoutubeDLRequest;
 import java.io.File;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -39,7 +36,9 @@ public class MediaPlayerPlugin extends Plugin {
         String title = call.getString("title", "Alhan");
         String artist = call.getString("artist", "");
         String artwork = call.getString("artwork", "");
-        if ((videoId == null || videoId.isEmpty()) && (localPath == null || localPath.isEmpty())) { call.reject("videoId or localPath is required"); return; }
+        if ((videoId == null || videoId.isEmpty()) && (localPath == null || localPath.isEmpty())) {
+            call.reject("videoId or localPath is required"); return;
+        }
 
         if (localPath != null && !localPath.isEmpty()) {
             try {
@@ -48,28 +47,32 @@ public class MediaPlayerPlugin extends Plugin {
                 if (!file.exists()) { call.reject("Local audio file not found"); return; }
                 startPlaybackService(Uri.fromFile(file).toString(), title, artist, artwork);
                 call.resolve();
-            } catch (Exception e) { call.reject("Unable to start local playback: " + e.getMessage()); }
+            } catch (Exception e) {
+                Log.e(TAG, "Local playback failed", e);
+                call.reject("Unable to start local playback: " + e.getMessage());
+            }
             return;
         }
 
         final String id = videoId;
         executor.execute(() -> {
             try {
-                YoutubeDLRequest request = new YoutubeDLRequest("https://www.youtube.com/watch?v=" + id);
-                request.addOption("--no-playlist");
-                request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best");
-                request.addOption("-g");
-                String processId = "alhan-play-" + UUID.randomUUID();
-                String output = YoutubeDL.getInstance().execute(request, processId).getOut();
-                if (output == null || output.trim().isEmpty()) throw new IllegalStateException("Could not resolve audio stream");
-                String url = output.trim().split("\\R")[0].trim();
+                // Resolve the stream through a server-side extractor API instead of
+                // spawning yt-dlp on the UI process. This avoids native process crashes
+                // on Huawei/Xiaomi Android builds and keeps the user inside Alhan.
+                String url = PipedStreamResolver.resolveAudio(id);
                 getActivity().runOnUiThread(() -> {
-                    try { startPlaybackService(url, title, artist, artwork); call.resolve(); }
-                    catch (Exception e) { Log.e(TAG, "Unable to start playback service", e); call.reject("Playback service failed: " + e.getMessage()); }
+                    try {
+                        startPlaybackService(url, title, artist, artwork);
+                        call.resolve();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Unable to start playback service", e);
+                        call.reject("Playback service failed: " + e.getMessage());
+                    }
                 });
             } catch (Exception e) {
-                Log.e(TAG, "Unable to resolve/play YouTube audio", e);
-                getActivity().runOnUiThread(() -> call.reject(e.getMessage() == null ? "Playback failed" : e.getMessage()));
+                Log.e(TAG, "Unable to resolve YouTube audio", e);
+                getActivity().runOnUiThread(() -> call.reject("تعذر الحصول على مصدر الصوت. حاول مرة أخرى."));
             }
         });
     }

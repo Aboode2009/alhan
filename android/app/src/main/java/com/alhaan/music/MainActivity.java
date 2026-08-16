@@ -1,19 +1,29 @@
 package com.alhaan.music;
 
-import android.Manifest;
-import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private static final String TAG = "AlhanStartup";
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(YoutubeDownloaderPlugin.class);
-        registerPlugin(MediaPlayerPlugin.class);
-        super.onCreate(savedInstanceState);
-        if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7001);
+        // Capacitor requires custom plugins to be registered before super.onCreate().
+        // Keep each registration isolated so one optional native feature can never
+        // prevent the main Alhan UI from starting.
+        try {
+            registerPlugin(YoutubeDownloaderPlugin.class);
+        } catch (Throwable t) {
+            Log.e(TAG, "YoutubeDownloader plugin registration failed", t);
         }
+        try {
+            registerPlugin(MediaPlayerPlugin.class);
+        } catch (Throwable t) {
+            Log.e(TAG, "MediaPlayer plugin registration failed", t);
+        }
+
+        super.onCreate(savedInstanceState);
     }
 }

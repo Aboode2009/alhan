@@ -17,9 +17,10 @@ import java.util.ArrayList;
 @CapacitorPlugin(name = "YoutubeDownloader")
 public class YoutubeDownloaderPlugin extends Plugin {
     private BroadcastReceiver receiver;
+    private boolean receiverRegistered = false;
 
-    @Override public void load() {
-        super.load();
+    private synchronized void ensureReceiverRegistered() {
+        if (receiverRegistered || getContext() == null) return;
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 String action = intent.getAction(); if (action == null) return;
@@ -31,11 +32,13 @@ public class YoutubeDownloaderPlugin extends Plugin {
         };
         IntentFilter filter = new IntentFilter(); filter.addAction(AlhanDownloadService.ACTION_PROGRESS); filter.addAction(AlhanDownloadService.ACTION_COMPLETE); filter.addAction(AlhanDownloadService.ACTION_ERROR);
         if (Build.VERSION.SDK_INT >= 33) getContext().registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED); else getContext().registerReceiver(receiver, filter);
+        receiverRegistered = true;
     }
 
     private File getDownloadDirectory() { File base = getContext().getExternalFilesDir(Environment.DIRECTORY_MUSIC); File directory = new File(base, "Alhan"); if (!directory.exists()) directory.mkdirs(); return directory; }
 
     @PluginMethod public void download(PluginCall call) {
+        ensureReceiverRegistered();
         String videoId = call.getString("videoId"); String title = call.getString("title", "Alhan");
         if (videoId == null || videoId.trim().isEmpty()) { call.reject("videoId is required"); return; }
         String taskId = java.util.UUID.randomUUID().toString();
@@ -55,5 +58,5 @@ public class YoutubeDownloaderPlugin extends Plugin {
     @PluginMethod public void delete(PluginCall call) { String videoId=call.getString("videoId"); if(videoId==null){call.reject("videoId is required");return;} File[] files=getDownloadDirectory().listFiles(); if(files!=null) for(File f:files) if(f.isFile()&&f.getName().startsWith(videoId+".")) f.delete(); call.resolve(); }
     @PluginMethod public void getStorageUsage(PluginCall call) { long total=0; File[] files=getDownloadDirectory().listFiles(); if(files!=null) for(File f:files) if(f.isFile()) total+=f.length(); call.resolve(new JSObject().put("bytes",total)); }
 
-    @Override protected void handleOnDestroy() { try { if(receiver!=null) getContext().unregisterReceiver(receiver); } catch(Exception ignored) {} super.handleOnDestroy(); }
+    @Override protected void handleOnDestroy() { try { if(receiverRegistered && receiver!=null) getContext().unregisterReceiver(receiver); } catch(Exception ignored) {} receiverRegistered=false; receiver=null; super.handleOnDestroy(); }
 }
